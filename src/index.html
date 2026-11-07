@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Photo299</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Barra menu -->
+    <header id="menubar">
+      <div class="brand"><span class="logo">P</span>Photo299</div>
+      <nav id="menus"></nav>
+      <div class="spacer"></div>
+      <div id="autosave-indicator" title="Cache locale">● Salvato in cache</div>
+    </header>
+
+    <!-- Barra opzioni strumento -->
+    <div id="optionsbar"></div>
+
+    <div id="main">
+      <!-- Strumenti -->
+      <aside id="toolbar"></aside>
+
+      <!-- Area di lavoro -->
+      <section id="viewport">
+        <canvas id="view"></canvas>
+        <div id="empty-hint" class="hidden">
+          <h2>Photo299</h2>
+          <p>Crea un nuovo documento o apri un'immagine per iniziare.</p>
+          <div class="row">
+            <button class="btn primary" data-cmd="new">Nuovo documento</button>
+            <button class="btn" data-cmd="open">Apri immagine…</button>
+          </div>
+          <p class="muted">Puoi anche trascinare un'immagine qui.</p>
+        </div>
+      </section>
+
+      <!-- Pannelli -->
+      <aside id="panels">
+        <div class="panel" id="panel-color">
+          <div class="panel-title">Colore</div>
+          <div class="panel-body">
+            <div class="color-row">
+              <div class="swatches-main">
+                <div id="color-bg" class="swatch-big" title="Colore di sfondo (clic per cambiare)"></div>
+                <div id="color-fg" class="swatch-big" title="Colore primo piano (clic per cambiare)"></div>
+                <button id="color-swap" class="mini" title="Scambia colori (X)">⇄</button>
+                <button id="color-reset" class="mini" title="Colori predefiniti (D)">◩</button>
+              </div>
+              <div class="color-inputs">
+                <label>HEX <input id="hex-input" type="text" maxlength="7" spellcheck="false"></label>
+                <input id="fg-picker" type="color" class="hidden">
+                <input id="bg-picker" type="color" class="hidden">
+              </div>
+            </div>
+            <div id="palette"></div>
+          </div>
+        </div>
+
+        <div class="panel grow" id="panel-layers">
+          <div class="panel-title">Livelli</div>
+          <div class="panel-body">
+            <div class="layer-props">
+              <label>Opacità <input id="layer-opacity" type="range" min="0" max="100" value="100"></label>
+              <span id="layer-opacity-val">100%</span>
+            </div>
+            <div id="layers-list"></div>
+            <div class="panel-actions">
+              <button class="icon-btn" data-cmd="layer-new" title="Nuovo livello (Ctrl+Shift+N)">＋</button>
+              <button class="icon-btn" data-cmd="layer-duplicate" title="Duplica livello (Ctrl+J)">⧉</button>
+              <button class="icon-btn" data-cmd="layer-up" title="Sposta su">▲</button>
+              <button class="icon-btn" data-cmd="layer-down" title="Sposta giù">▼</button>
+              <button class="icon-btn" data-cmd="layer-merge-down" title="Unisci sotto (Ctrl+E)">⤓</button>
+              <button class="icon-btn danger" data-cmd="layer-delete" title="Elimina livello">🗑</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel grow" id="panel-history">
+          <div class="panel-title">Cronologia</div>
+          <div class="panel-body">
+            <div id="history-list"></div>
+            <div class="panel-actions">
+              <button class="icon-btn" data-cmd="undo" title="Annulla (Ctrl+Z)">↶</button>
+              <button class="icon-btn" data-cmd="redo" title="Ripeti (Ctrl+Shift+Z / Ctrl+Y)">↷</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Barra di stato -->
+    <footer id="statusbar">
+      <span id="status-zoom">100%</span>
+      <span id="status-size">—</span>
+      <span id="status-pos">—</span>
+      <span class="spacer"></span>
+      <span id="status-msg"></span>
+    </footer>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+  <div id="menu-dropdown" class="hidden"></div>
+
+  <input type="file" id="file-open" accept="image/*,.p299" class="hidden">
+  <input type="file" id="file-place" accept="image/*" class="hidden">
+
+  <script src="js/util.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/history.js"></script>
+  <script src="js/doc.js"></script>
+  <script src="js/selection.js"></script>
+  <script src="js/transform.js"></script>
+  <script src="js/tools.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/dialogs.js"></script>
+  <script src="js/commands.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
