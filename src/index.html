@@ -10,7 +10,7 @@
   <div id="app">
     <!-- Barra menu -->
     <header id="menubar">
-      <div class="brand"><span class="logo">P</span>Photo299</div>
+      <div class="brand"><img src="logo.png" class="logo-img" alt="Logo">Photo299</div>
       <nav id="menus"></nav>
       <div class="spacer"></div>
       <div id="autosave-indicator" title="Cache locale">● Salvato in cache</div>
@@ -27,6 +27,7 @@
       <section id="viewport">
         <canvas id="view"></canvas>
         <div id="empty-hint" class="hidden">
+          <img src="logo.png" class="empty-logo" alt="Photo299">
           <h2>Photo299</h2>
           <p>Crea un nuovo documento o apri un'immagine per iniziare.</p>
           <div class="row">
@@ -60,7 +61,7 @@
         </div>
 
         <div class="panel grow" id="panel-layers">
-          <div class="panel-title">Livelli</div>
+          <div class="panel-title">Livelli <span id="layers-sel-count" class="muted" style="font-weight:400;text-transform:none;margin-left:6px"></span></div>
           <div class="panel-body">
             <div class="layer-props">
               <label>Opacità <input id="layer-opacity" type="range" min="0" max="100" value="100"></label>
@@ -69,11 +70,12 @@
             <div id="layers-list"></div>
             <div class="panel-actions">
               <button class="icon-btn" data-cmd="layer-new" title="Nuovo livello (Ctrl+Shift+N)">＋</button>
-              <button class="icon-btn" data-cmd="layer-duplicate" title="Duplica livello (Ctrl+J)">⧉</button>
-              <button class="icon-btn" data-cmd="layer-up" title="Sposta su">▲</button>
-              <button class="icon-btn" data-cmd="layer-down" title="Sposta giù">▼</button>
-              <button class="icon-btn" data-cmd="layer-merge-down" title="Unisci sotto (Ctrl+E)">⤓</button>
-              <button class="icon-btn danger" data-cmd="layer-delete" title="Elimina livello">🗑</button>
+              <button class="icon-btn" data-cmd="layer-text" title="Nuovo livello di testo (T)">T</button>
+              <button class="icon-btn" data-cmd="layer-duplicate" title="Duplica livelli selezionati (Ctrl+J)">⧉</button>
+              <button class="icon-btn" data-cmd="layer-up" title="Sposta su (Ctrl+])">▲</button>
+              <button class="icon-btn" data-cmd="layer-down" title="Sposta giù (Ctrl+[)">▼</button>
+              <button class="icon-btn" data-cmd="layer-merge-down" title="Unisci selezionati o sotto (Ctrl+E)">⤓</button>
+              <button class="icon-btn danger" data-cmd="layer-delete" title="Elimina livelli selezionati">🗑</button>
             </div>
           </div>
         </div>
@@ -104,6 +106,7 @@
   <div id="modal-root"></div>
   <div id="toast-root"></div>
   <div id="menu-dropdown" class="hidden"></div>
+  <div id="context-menu" class="hidden"></div>
 
   <input type="file" id="file-open" accept="image/*,.p299" class="hidden">
   <input type="file" id="file-place" accept="image/*" class="hidden">

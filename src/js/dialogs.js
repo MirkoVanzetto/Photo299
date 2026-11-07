@@ -1,4 +1,4 @@
-// Photo299 - finestre di dialogo
+// Photo299 - finestre di dialogo e creazione/modifica testo
 'use strict';
 
 P.dialog = {
@@ -22,18 +22,156 @@ P.dialog = {
     foot.appendChild(ok);
     bd.addEventListener('keydown', e => {
       e.stopPropagation();
-      if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') ok.click();
+      if (e.key === 'Enter' && e.target.tagName !== 'BUTTON' && e.target.tagName !== 'TEXTAREA') ok.click();
+      if (e.key === 'Enter' && e.ctrlKey) ok.click();
       if (e.key === 'Escape') { close(); if (onCancel) onCancel(); }
     });
     root.appendChild(bd);
     P.dialog.isOpen = true;
-    setTimeout(() => { const f = b.querySelector('input,select'); (f || ok).focus(); if (f && f.select) f.select(); }, 0);
+    setTimeout(() => { const f = b.querySelector('textarea,input,select'); (f || ok).focus(); if (f && f.select) f.select(); }, 0);
     return { root: b, close };
   },
   isOpen: false,
 
   confirm(title, text, okLabel = 'Continua') {
     return new Promise(res => this.open({ title, body: `<p style="margin:0;max-width:420px">${text}</p>`, okLabel, onOk: () => res(true), onCancel: () => res(false) }));
+  },
+
+  // ---------- Editor di Testo completo con anteprima sul canvas ----------
+  textEditor(opts = {}) {
+    if (!P.doc) return;
+    P.app.cancelPending();
+    const d = P.doc;
+    const editingLayer = opts.layer && opts.layer.textData ? opts.layer : null;
+    const ts = P.settings.text;
+
+    const initial = editingLayer ? { ...editingLayer.textData } : {
+      text: 'Nuovo testo',
+      font: ts.font || 'Segoe UI, sans-serif',
+      size: ts.size || 54,
+      bold: ts.bold !== false,
+      italic: !!ts.italic,
+      align: ts.align || 'left',
+      color: P.colors.fg || '#ffffff',
+      strokeWidth: ts.strokeWidth || 0,
+      strokeColor: ts.strokeColor || '#000000',
+      x: opts.x != null ? opts.x : Math.max(20, Math.round(d.width * 0.25)),
+      y: opts.y != null ? opts.y : Math.max(20, Math.round(d.height * 0.35))
+    };
+
+    const body = `
+      <div class="field" style="flex-direction:column;align-items:stretch;gap:6px">
+        <label style="width:auto">Contenuto del testo <span class="muted">(Ctrl+Invio per confermare)</span></label>
+        <textarea id="tx-content" rows="3" style="width:100%;background:var(--bg0);color:var(--text);border:1px solid var(--line);border-radius:4px;padding:8px;font:14px/1.4 inherit">${initial.text}</textarea>
+      </div>
+      <div class="field">
+        <label>Carattere</label>
+        <select id="tx-font" style="flex:1">${P.FONTS.map(f => `<option value="${f}" ${initial.font === f ? 'selected' : ''}>${f.split(',')[0]}</option>`).join('')}</select>
+      </div>
+      <div class="field">
+        <label>Dimensione</label>
+        <input id="tx-size" type="range" min="8" max="400" value="${initial.size}">
+        <input id="tx-size-n" type="number" min="8" max="600" value="${initial.size}"> px
+      </div>
+      <div class="field">
+        <label>Stile e Allinea</label>
+        <button type="button" id="tx-bold" class="btn small${initial.bold ? ' active' : ''}"><b>B Grassetto</b></button>
+        <button type="button" id="tx-italic" class="btn small${initial.italic ? ' active' : ''}"><i>I Corsivo</i></button>
+        <select id="tx-align">
+          <option value="left" ${initial.align === 'left' ? 'selected' : ''}>Sinistra</option>
+          <option value="center" ${initial.align === 'center' ? 'selected' : ''}>Centro</option>
+          <option value="right" ${initial.align === 'right' ? 'selected' : ''}>Destra</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Colore testo</label>
+        <input id="tx-color" type="color" value="${initial.color}">
+        <span style="margin-left:16px">Contorno</span>
+        <input id="tx-stroke-w" type="number" min="0" max="40" value="${initial.strokeWidth}" style="width:54px"> px
+        <input id="tx-stroke-c" type="color" value="${initial.strokeColor}">
+      </div>
+    `;
+
+    // Creiamo un canvas temporaneo di anteprima per mostrare il testo in tempo reale sul documento
+    const previewCanvas = P.util.makeCanvas(d.width, d.height);
+    const previewLayer = { canvas: previewCanvas, textData: { ...initial } };
+
+    let state = { ...initial };
+    const updatePreview = () => {
+      previewLayer.textData = { ...state };
+      P.Doc.renderTextLayer(previewLayer);
+      if (editingLayer) {
+        P.render.override = { layerId: editingLayer.id, draw: ctx => ctx.drawImage(previewCanvas, 0, 0) };
+      } else {
+        const act = P.Doc.active();
+        if (act) {
+          P.render.override = {
+            layerId: act.id,
+            draw: ctx => { ctx.drawImage(act.canvas, 0, 0); ctx.drawImage(previewCanvas, 0, 0); }
+          };
+        }
+      }
+      P.render.requestContent();
+    };
+
+    const dlg = this.open({
+      title: editingLayer ? 'Modifica livello di testo' : 'Inserisci Testo',
+      body,
+      okLabel: editingLayer ? 'Aggiorna testo' : 'Inserisci testo',
+      onOk: () => {
+        P.render.override = null;
+        if (!state.text.trim()) {
+          P.render.requestContent();
+          return;
+        }
+        // Salva preferenze per i prossimi testi
+        ts.font = state.font; ts.size = state.size; ts.bold = state.bold; ts.italic = state.italic;
+        ts.align = state.align; ts.strokeWidth = state.strokeWidth; ts.strokeColor = state.strokeColor;
+
+        const shortName = 'T: ' + state.text.trim().split(/\r?\n/)[0].slice(0, 22);
+        if (editingLayer) {
+          editingLayer.textData = { ...state };
+          editingLayer.name = shortName;
+          P.Doc.renderTextLayer(editingLayer);
+          P.history.commit('Modifica testo');
+        } else {
+          const nl = P.Doc.addLayer(shortName);
+          nl.textData = { ...state };
+          P.Doc.renderTextLayer(nl);
+          P.history.commit('Inserisci testo');
+        }
+        P.ui.updateOptions();
+      },
+      onCancel: () => {
+        P.render.override = null;
+        P.render.requestContent();
+      }
+    });
+
+    const r = dlg.root;
+    const txContent = r.querySelector('#tx-content');
+    const txFont = r.querySelector('#tx-font');
+    const txSize = r.querySelector('#tx-size');
+    const txSizeN = r.querySelector('#tx-size-n');
+    const txBold = r.querySelector('#tx-bold');
+    const txItalic = r.querySelector('#tx-italic');
+    const txAlign = r.querySelector('#tx-align');
+    const txColor = r.querySelector('#tx-color');
+    const txStrokeW = r.querySelector('#tx-stroke-w');
+    const txStrokeC = r.querySelector('#tx-stroke-c');
+
+    txContent.addEventListener('input', () => { state.text = txContent.value; updatePreview(); });
+    txFont.addEventListener('change', () => { state.font = txFont.value; updatePreview(); });
+    txSize.addEventListener('input', () => { state.size = +txSize.value; txSizeN.value = state.size; updatePreview(); });
+    txSizeN.addEventListener('input', () => { state.size = P.util.clamp(+txSizeN.value || 24, 8, 600); txSize.value = Math.min(400, state.size); updatePreview(); });
+    txBold.addEventListener('click', () => { state.bold = !state.bold; txBold.classList.toggle('active', state.bold); updatePreview(); });
+    txItalic.addEventListener('click', () => { state.italic = !state.italic; txItalic.classList.toggle('active', state.italic); updatePreview(); });
+    txAlign.addEventListener('change', () => { state.align = txAlign.value; updatePreview(); });
+    txColor.addEventListener('input', () => { state.color = txColor.value; updatePreview(); });
+    txStrokeW.addEventListener('input', () => { state.strokeWidth = Math.max(0, +txStrokeW.value || 0); updatePreview(); });
+    txStrokeC.addEventListener('input', () => { state.strokeColor = txStrokeC.value; updatePreview(); });
+
+    updatePreview();
   },
 
   newDoc() {
@@ -131,7 +269,7 @@ P.dialog = {
     const refresh = P.util.debounce(() => { preview = build(); P.render.override = { layerId: layer.id, draw: ctx => ctx.drawImage(preview, 0, 0) }; P.render.requestContent(); }, 30);
     const dlg = this.open({
       title: 'Regolazioni', body, okLabel: 'Applica',
-      onOk: () => { P.render.override = null; layer.canvas = build(); P.Doc.markDirty(layer); P.history.commit('Regolazioni'); },
+      onOk: () => { P.render.override = null; layer.canvas = build(); if (layer.textData) layer.textData = null; P.Doc.markDirty(layer); P.history.commit('Regolazioni'); },
       onCancel: () => { P.render.override = null; P.render.requestContent(); }
     });
     dlg.root.querySelectorAll('input[type=range]').forEach(inp => inp.addEventListener('input', () => {
@@ -147,15 +285,15 @@ P.dialog = {
     const tools = P.tools.list.filter(t => !t.sep).map(t => `<tr><td style="padding:3px 16px 3px 0">${t.name}</td><td class="muted">${t.key}</td></tr>`).join('');
     this.open({
       title: 'Scorciatoie da tastiera', wide: true, cancelLabel: null, okLabel: 'Chiudi',
-      body: `<div style="display:flex;gap:30px;max-height:60vh;overflow:auto"><table>${list}</table><table>${tools}<tr><td style="padding:3px 16px 3px 0">Scambia colori</td><td class="muted">X</td></tr><tr><td>Colori predefiniti</td><td class="muted">D</td></tr><tr><td>Dimensione pennello</td><td class="muted">[ ]</td></tr><tr><td>Sposta vista</td><td class="muted">Spazio + trascina</td></tr><tr><td>Zoom</td><td class="muted">Rotella</td></tr></table></div>`
+      body: `<div style="display:flex;gap:30px;max-height:60vh;overflow:auto"><table>${list}</table><table>${tools}<tr><td style="padding:3px 16px 3px 0">Menu rapido (Deseleziona, Taglia...)</td><td class="muted">Tasto destro</td></tr><tr><td>Selezione multipla livelli</td><td class="muted">Ctrl + clic</td></tr><tr><td>Scambia colori</td><td class="muted">X</td></tr><tr><td>Colori predefiniti</td><td class="muted">D</td></tr><tr><td>Dimensione pennello</td><td class="muted">[ ]</td></tr><tr><td>Sposta vista</td><td class="muted">Spazio + trascina</td></tr><tr><td>Zoom</td><td class="muted">Rotella</td></tr></table></div>`
     });
   },
 
   about() {
     this.open({
       title: 'Informazioni su Photo299', cancelLabel: null, okLabel: 'Chiudi',
-      body: `<div style="text-align:center"><div class="logo" style="width:56px;height:56px;font-size:30px;margin:0 auto 10px;border-radius:12px">P</div>
-        <h3 style="margin:4px 0">Photo299 1.0.0</h3><p class="muted" style="margin:0">Editor di immagini leggero.<br>Il lavoro viene salvato automaticamente nella cache locale.</p></div>`
+      body: `<div style="text-align:center"><img src="logo.png" style="width:72px;height:72px;margin:0 auto 10px;display:block">
+        <h3 style="margin:4px 0">Photo299 1.1.0</h3><p class="muted" style="margin:0">Editor di immagini desktop leggero.<br>Il lavoro viene salvato automaticamente nella cache locale.</p></div>`
     });
   }
 };

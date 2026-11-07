@@ -1,4 +1,4 @@
-// Photo299 - Trasformazione libera (Ctrl+T): sposta, scala, ruota, rifletti
+// Photo299 - Trasformazione libera (Ctrl+T) e spostamento anche su più livelli selezionati
 'use strict';
 
 P.transform = {
@@ -8,53 +8,85 @@ P.transform = {
   // opts: { moveOnly, source: {canvas,x,y}, label, onCancel, onCommit }
   begin(opts = {}) {
     if (this.active) return;
-    const layer = P.Doc.active(); if (!layer) return;
-    if (!layer.visible && !opts.source) { P.util.toast('Il livello è nascosto'); return; }
-    let src, x, y, base, fromSel = false;
+    const d = P.doc; if (!d) return;
+    const activeLayer = P.Doc.active(); if (!activeLayer) return;
+
+    let items = []; // [{ layer, src, base }]
+    let x = 0, y = 0, sw = 0, sh = 0, fromSel = false;
+
     if (opts.source) {
-      src = opts.source.canvas; x = opts.source.x; y = opts.source.y;
-      base = P.util.cloneCanvas(layer.canvas);
+      if (!activeLayer.visible) { P.util.toast('Il livello è nascosto'); return; }
+      const src = opts.source.canvas;
+      x = opts.source.x; y = opts.source.y; sw = src.width; sh = src.height;
+      items.push({ layer: activeLayer, src, base: P.util.cloneCanvas(activeLayer.canvas) });
     } else if (P.sel.active) {
-      const ex = P.sel.extract(layer.canvas);
-      src = ex.canvas; x = ex.x; y = ex.y;
-      base = P.util.cloneCanvas(layer.canvas);
-      P.sel.clearFrom(base);
+      const selLayers = P.Doc.selectedLayers().filter(l => l.visible);
+      if (!selLayers.length) { P.util.toast('I livelli selezionati sono nascosti'); return; }
+      const b = P.sel.bounds;
+      x = b.x; y = b.y; sw = b.w; sh = b.h;
       fromSel = true;
+      for (const l of selLayers) {
+        const ex = P.sel.extract(l.canvas);
+        const base = P.util.cloneCanvas(l.canvas);
+        P.sel.clearFrom(base);
+        items.push({ layer: l, src: ex.canvas, base });
+      }
     } else {
-      const b = P.util.contentBounds(layer.canvas);
-      if (!b) { P.util.toast('Il livello è vuoto'); return; }
-      src = P.util.makeCanvas(b.w, b.h);
-      src.getContext('2d').drawImage(layer.canvas, -b.x, -b.y);
-      x = b.x; y = b.y;
-      base = P.util.makeCanvas(layer.canvas.width, layer.canvas.height);
+      const selLayers = P.Doc.selectedLayers().filter(l => l.visible);
+      if (!selLayers.length) { P.util.toast('I livelli selezionati sono nascosti'); return; }
+      // Calcola il bounding box unione di tutti i livelli selezionati
+      let minX = d.width, minY = d.height, maxX = -1, maxY = -1;
+      for (const l of selLayers) {
+        const b = P.util.contentBounds(l.canvas);
+        if (b) {
+          if (b.x < minX) minX = b.x;
+          if (b.y < minY) minY = b.y;
+          if (b.x + b.w > maxX) maxX = b.x + b.w;
+          if (b.y + b.h > maxY) maxY = b.y + b.h;
+        }
+      }
+      if (maxX < 0) { P.util.toast('I livelli selezionati sono vuoti'); return; }
+      x = minX; y = minY; sw = maxX - minX; sh = maxY - minY;
+      for (const l of selLayers) {
+        const src = P.util.makeCanvas(sw, sh);
+        src.getContext('2d').drawImage(l.canvas, -x, -y);
+        const base = P.util.makeCanvas(l.canvas.width, l.canvas.height);
+        items.push({ layer: l, src, base });
+      }
     }
-    const sw = src.width, sh = src.height;
+
     this.s = {
-      layer, src, base, sw, sh, fromSel,
+      items, sw, sh, fromSel,
       cx: x + sw / 2, cy: y + sh / 2, w: sw, h: sh, angle: 0,
       origCx: x + sw / 2, origCy: y + sh / 2,
-      moveOnly: !!opts.moveOnly, label: opts.label || (opts.moveOnly ? 'Sposta' : 'Trasformazione libera'),
-      onCancel: opts.onCancel, onCommit: opts.onCommit, drag: null
+      moveOnly: !!opts.moveOnly,
+      label: opts.label || (opts.moveOnly ? 'Sposta' : 'Trasformazione libera'),
+      onCancel: opts.onCancel,
+      onCommit: opts.onCommit,
+      drag: null
     };
     this.active = true;
-    P.render.override = { layerId: layer.id, draw: ctx => this.drawAll(ctx) };
+    const ovMap = new Map();
+    for (const it of items) {
+      ovMap.set(it.layer.id, ctx => this.drawItem(ctx, it));
+    }
+    P.render.overrides = ovMap;
     P.render.requestContent();
     P.ui.updateOptions();
   },
 
-  drawTransformed(ctx) {
+  drawItem(ctx, it) {
     const s = this.s;
+    ctx.drawImage(it.base, 0, 0);
     ctx.save();
     ctx.translate(s.cx, s.cy);
     ctx.rotate(s.angle);
     ctx.scale(s.w / s.sw, s.h / s.sh);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(s.src, -s.sw / 2, -s.sh / 2);
+    ctx.drawImage(it.src, -s.sw / 2, -s.sh / 2);
     ctx.restore();
   },
-
-  drawAll(ctx) { ctx.drawImage(this.s.base, 0, 0); this.drawTransformed(ctx); },
 
   toLocal(pt, st = this.s) {
     const dx = pt.x - st.cx, dy = pt.y - st.cy, c = Math.cos(st.angle), s = Math.sin(st.angle);
@@ -75,7 +107,7 @@ P.transform = {
   },
 
   hitTest(pt) {
-    const s = this.s, z = P.view.zoom, tol = 8 / z;
+    const s = this.s, z = P.view.zoom, tol = 9 / z;
     if (!s.moveOnly) {
       for (const h of this.handles()) if (Math.hypot(h.x - pt.x, h.y - pt.y) <= tol) return { type: 'scale', hx: h.hx, hy: h.hy };
     }
@@ -124,7 +156,7 @@ P.transform = {
       let nw = hx ? (M.x - A.x) * hx : st.w;
       let nh = hy ? (M.y - A.y) * hy : st.h;
       const corner = hx && hy;
-      if (corner && !e.shiftKey) { // proporzionale di default (Maiusc = libero)
+      if (corner && !e.shiftKey) {
         const sx = nw / st.w, sy = nh / st.h;
         const k = Math.abs(sx) > Math.abs(sy) ? sx : sy;
         nw = st.w * k; nh = st.h * k;
@@ -164,14 +196,27 @@ P.transform = {
 
   commit() {
     const s = this.s; if (!s) return;
-    const changed = s.cx !== s.origCx || s.cy !== s.origCy || s.w !== s.sw || s.h !== s.sh || s.angle !== 0;
+    const dx = s.cx - s.origCx, dy = s.cy - s.origCy;
+    const changed = dx !== 0 || dy !== 0 || s.w !== s.sw || s.h !== s.sh || s.angle !== 0;
     if (!changed && !s.onCommit) { this.cancel(); return; }
-    const c = P.util.makeCanvas(s.layer.canvas.width, s.layer.canvas.height);
-    this.drawAll(c.getContext('2d'));
-    s.layer.canvas = c;
-    P.Doc.markDirty(s.layer);
+    for (const it of s.items) {
+      const c = P.util.makeCanvas(it.layer.canvas.width, it.layer.canvas.height);
+      this.drawItem(c.getContext('2d'), it);
+      it.layer.canvas = c;
+      // Se è solo spostamento, aggiorna anche la posizione del testo modificabile
+      if (it.layer.textData && !s.fromSel) {
+        if (s.w === s.sw && s.h === s.sh && s.angle === 0) {
+          it.layer.textData.x = Math.round(it.layer.textData.x + dx);
+          it.layer.textData.y = Math.round(it.layer.textData.y + dy);
+        } else {
+          // Rasterizzato dopo rotazione/scala libera
+          it.layer.textData = null;
+        }
+      }
+      P.Doc.markDirty(it.layer);
+    }
     if (s.fromSel) {
-      if (s.moveOnly) P.sel.translate(s.cx - s.origCx, s.cy - s.origCy);
+      if (s.moveOnly) P.sel.translate(dx, dy);
       else P.sel.clear(true);
     }
     const label = s.label, cb = s.onCommit;
@@ -191,6 +236,7 @@ P.transform = {
   end() {
     this.active = false; this.s = null;
     P.render.override = null;
+    P.render.overrides = null;
     P.render.requestContent();
     P.ui.updateOptions();
   },
@@ -200,7 +246,7 @@ P.transform = {
     const v = P.view;
     const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => v.docToScreen(this.toWorld(a * s.w / 2, b * s.h / 2)));
     ctx.save();
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.2;
     ctx.strokeStyle = '#3d8bfd';
     ctx.beginPath();
     corners.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));

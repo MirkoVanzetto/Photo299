@@ -1,8 +1,9 @@
-// Photo299 - comandi (menu + scorciatoie)
+// Photo299 - comandi (menu + scorciatoie + gestione multi-livello)
 'use strict';
 
 const hasDoc = () => !!P.doc;
 const hasSel = () => !!P.doc && P.sel.active;
+const isTextLayer = () => { const l = P.Doc.active(); return !!(l && l.textData); };
 
 P.clipboard = null; // { canvas, x, y }
 
@@ -65,7 +66,6 @@ P.cmd = {
     this.placeImage(img, f.name.replace(/\.[^.]+$/, ''));
   },
 
-  // Inserisce un'immagine come nuovo livello e avvia la trasformazione libera
   placeImage(img, name, pos) {
     P.app.cancelPending();
     const d = P.doc;
@@ -74,6 +74,7 @@ P.cmd = {
     const src = P.util.makeCanvas(w, h);
     const sctx = src.getContext('2d'); sctx.imageSmoothingQuality = 'high'; sctx.drawImage(img, 0, 0, w, h);
     const prevActive = d.activeId;
+    const prevSel = [...(d.selectedIds || [d.activeId])];
     const layer = P.Doc.addLayer(name || 'Immagine');
     P.sel.clear(true);
     P.ui.updateLayers();
@@ -81,15 +82,26 @@ P.cmd = {
       source: { canvas: src, x: pos ? pos.x : Math.round((d.width - w) / 2), y: pos ? pos.y : Math.round((d.height - h) / 2) },
       label: 'Inserisci immagine',
       onCommit: () => {},
-      onCancel: () => { d.layers = d.layers.filter(l => l !== layer); d.activeId = prevActive; P.app.changed({ content: true, noAutosave: true }); }
+      onCancel: () => {
+        d.layers = d.layers.filter(l => l !== layer);
+        d.activeId = prevActive;
+        d.selectedIds = prevSel;
+        P.app.changed({ content: true, noAutosave: true });
+      }
     });
   },
 
   // ---------- Progetto .p299 ----------
   async projectBytes() {
     const d = P.doc;
-    const layers = d.layers.map(l => ({ name: l.name, visible: l.visible, opacity: l.opacity, data: l.canvas.toDataURL('image/png') }));
-    const json = JSON.stringify({ app: 'Photo299', version: 1, name: d.name, width: d.width, height: d.height, activeIndex: P.Doc.activeIndex(), layers });
+    const layers = d.layers.map(l => ({
+      name: l.name,
+      visible: l.visible,
+      opacity: l.opacity,
+      textData: l.textData || null,
+      data: l.canvas.toDataURL('image/png')
+    }));
+    const json = JSON.stringify({ app: 'Photo299', version: 2, name: d.name, width: d.width, height: d.height, activeIndex: P.Doc.activeIndex(), layers });
     return new TextEncoder().encode(json);
   },
   async save() {
@@ -118,16 +130,19 @@ P.cmd = {
     let data;
     try { data = JSON.parse(text); if (data.app !== 'Photo299') throw 0; } catch { P.util.toast('File di progetto non valido'); return; }
     P.app.cancelPending();
-    const doc = { id: P.util.uid(), name: data.name || fileName.replace(/\.p299$/i, ''), width: data.width, height: data.height, layers: [], activeId: null, filePath: path || null };
+    const doc = { id: P.util.uid(), name: data.name || fileName.replace(/\.p299$/i, ''), width: data.width, height: data.height, layers: [], activeId: null, selectedIds: [], filePath: path || null };
     for (const ld of data.layers) {
       const l = P.Doc.createLayer(ld.name, data.width, data.height);
-      l.visible = ld.visible !== false; l.opacity = ld.opacity == null ? 1 : ld.opacity;
+      l.visible = ld.visible !== false;
+      l.opacity = ld.opacity == null ? 1 : ld.opacity;
+      l.textData = ld.textData || null;
       const img = await P.util.srcToImage(ld.data);
       l.canvas.getContext('2d').drawImage(img, 0, 0);
       doc.layers.push(l);
     }
     if (!doc.layers.length) doc.layers.push(P.Doc.createLayer('Livello 1', data.width, data.height));
     doc.activeId = (doc.layers[data.activeIndex] || doc.layers[doc.layers.length - 1]).id;
+    doc.selectedIds = [doc.activeId];
     P.doc = doc;
     P.history.reset(); P.sel.clear(true);
     P.history.commit('Apri progetto');
@@ -145,7 +160,6 @@ P.cmd = {
     let c = P.Doc.composite(format === 'jpeg' ? bg : null);
     if (scale !== 1) {
       const w = Math.max(1, Math.round(d.width * scale)), h = Math.max(1, Math.round(d.height * scale));
-      // riduzione a passi per una qualità migliore
       while (c.width / 2 >= w && c.height / 2 >= h) {
         const t = P.util.makeCanvas(c.width / 2, c.height / 2); const x = t.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, t.width, t.height); c = t;
       }
@@ -171,9 +185,13 @@ P.cmd = {
   copy() { const l = P.Doc.active(); if (!l) return; this.copyFrom(l.canvas); P.util.status('Copiato'); },
   copyMerged() { if (!P.doc) return; this.copyFrom(P.Doc.composite()); P.util.status('Copiato (unito)'); },
   cut() {
-    const l = P.Doc.active(); if (!l) return;
-    this.copyFrom(l.canvas);
-    P.sel.clearFrom(l.canvas); P.Doc.markDirty(l);
+    const sel = P.Doc.selectedLayers(); if (!sel.length) return;
+    this.copyFrom(P.Doc.active().canvas);
+    for (const l of sel) {
+      if (l.textData) l.textData = null;
+      P.sel.clearFrom(l.canvas);
+      P.Doc.markDirty(l);
+    }
     P.history.commit('Taglia');
   },
   async paste() {
@@ -201,13 +219,18 @@ P.cmd = {
     P.history.commit('Incolla');
   },
   clear() {
-    const l = P.Doc.active(); if (!l) return;
+    const sel = P.Doc.selectedLayers(); if (!sel.length) return;
     if (!P.sel.active) { P.util.toast('Nessuna selezione da cancellare'); return; }
-    P.sel.clearFrom(l.canvas); P.Doc.markDirty(l);
+    for (const l of sel) {
+      if (l.textData) l.textData = null;
+      P.sel.clearFrom(l.canvas);
+      P.Doc.markDirty(l);
+    }
     P.history.commit('Cancella');
   },
   fill(color, label) {
     const l = P.Doc.active(); if (!l) return;
+    if (l.textData) l.textData = null;
     const ctx = l.canvas.getContext('2d');
     if (P.sel.active) {
       const t = P.util.cloneCanvas(P.sel.mask), tc = t.getContext('2d');
@@ -221,7 +244,8 @@ P.cmd = {
   // ---------- Immagine ----------
   resizeImage(w, h) {
     P.app.cancelPending();
-    P.Doc.mapLayers(w, h, (ctx, src) => {
+    P.Doc.mapLayers(w, h, (ctx, src, l) => {
+      if (l.textData) l.textData = null;
       let c = src;
       while (c.width / 2 >= w && c.height / 2 >= h) { const t = P.util.makeCanvas(c.width / 2, c.height / 2); const x = t.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, t.width, t.height); c = t; }
       ctx.drawImage(c, 0, 0, w, h);
@@ -241,6 +265,7 @@ P.cmd = {
         ctx.fillStyle = fill; ctx.fillRect(0, 0, w, h); ctx.clearRect(ox, oy, oldW, oldH);
       }
       ctx.drawImage(src, ox, oy);
+      if (l.textData) { l.textData.x += ox; l.textData.y += oy; }
     });
     P.sel.clear(true);
     P.history.commit('Dimensione quadro');
@@ -249,7 +274,11 @@ P.cmd = {
   cropTo(r) {
     P.app.cancelPending();
     if (!r || r.w < 1 || r.h < 1) return;
-    P.Doc.mapLayers(Math.round(r.w), Math.round(r.h), (ctx, src) => ctx.drawImage(src, -Math.round(r.x), -Math.round(r.y)));
+    const rx = Math.round(r.x), ry = Math.round(r.y);
+    P.Doc.mapLayers(Math.round(r.w), Math.round(r.h), (ctx, src, l) => {
+      ctx.drawImage(src, -rx, -ry);
+      if (l.textData) { l.textData.x -= rx; l.textData.y -= ry; }
+    });
     P.sel.clear(true);
     P.history.commit('Ritaglia');
     P.view.fit(1);
@@ -264,7 +293,10 @@ P.cmd = {
     P.app.cancelPending();
     const d = P.doc, swap = deg % 180 !== 0;
     const W = swap ? d.height : d.width, H = swap ? d.width : d.height;
-    P.Doc.mapLayers(W, H, (ctx, src) => { ctx.translate(W / 2, H / 2); ctx.rotate(deg * Math.PI / 180); ctx.drawImage(src, -src.width / 2, -src.height / 2); });
+    P.Doc.mapLayers(W, H, (ctx, src, l) => {
+      if (l.textData) l.textData = null;
+      ctx.translate(W / 2, H / 2); ctx.rotate(deg * Math.PI / 180); ctx.drawImage(src, -src.width / 2, -src.height / 2);
+    });
     P.sel.clear(true);
     P.history.commit(`Ruota ${deg}°`);
     P.view.fit(1);
@@ -273,11 +305,13 @@ P.cmd = {
     P.app.cancelPending();
     const d = P.doc;
     const doFlip = l => {
+      if (l.textData) l.textData = null;
       const c = P.util.makeCanvas(d.width, d.height), x = c.getContext('2d');
       if (axis === 'h') { x.translate(d.width, 0); x.scale(-1, 1); } else { x.translate(0, d.height); x.scale(1, -1); }
       x.drawImage(l.canvas, 0, 0); l.canvas = c; P.Doc.markDirty(l);
     };
-    if (layerOnly) doFlip(P.Doc.active()); else { d.layers.forEach(doFlip); P.sel.clear(true); }
+    if (layerOnly) P.Doc.selectedLayers().forEach(doFlip);
+    else { d.layers.forEach(doFlip); P.sel.clear(true); }
     P.history.commit((layerOnly ? 'Rifletti livello ' : 'Rifletti ') + (axis === 'h' ? 'orizzontale' : 'verticale'));
   },
   filteredLayer(layer, filter) {
@@ -293,26 +327,45 @@ P.cmd = {
   },
   applyFilter(filter, label) {
     P.app.cancelPending();
-    const l = P.Doc.active(); if (!l) return;
-    l.canvas = this.filteredLayer(l, filter); P.Doc.markDirty(l);
+    const sel = P.Doc.selectedLayers(); if (!sel.length) return;
+    for (const l of sel) {
+      if (l.textData) l.textData = null;
+      l.canvas = this.filteredLayer(l, filter);
+      P.Doc.markDirty(l);
+    }
     P.history.commit(label);
   },
 
-  // ---------- Livelli ----------
+  // ---------- Livelli (supporto selezione multipla) ----------
   layerNew() { P.app.cancelPending(); P.Doc.addLayer(); P.history.commit('Nuovo livello'); },
   layerDuplicate() {
     P.app.cancelPending();
-    const l = P.Doc.active(); if (!l) return;
-    const n = P.Doc.addLayer(l.name + ' copia', l.canvas); n.opacity = l.opacity;
-    P.history.commit('Duplica livello');
+    const sel = P.Doc.selectedLayers(); if (!sel.length) return;
+    const newIds = [];
+    for (const l of sel) {
+      const n = P.Doc.addLayer(l.name + ' copia', l.canvas);
+      n.opacity = l.opacity;
+      if (l.textData) n.textData = { ...l.textData };
+      newIds.push(n.id);
+    }
+    P.doc.selectedIds = newIds;
+    P.doc.activeId = newIds[newIds.length - 1];
+    P.history.commit(sel.length > 1 ? 'Duplica livelli' : 'Duplica livello');
   },
   layerDelete() {
     P.app.cancelPending();
-    const d = P.doc; if (d.layers.length <= 1) { P.util.toast('Il documento deve avere almeno un livello'); return; }
-    const i = P.Doc.activeIndex();
-    d.layers.splice(i, 1);
-    d.activeId = d.layers[Math.max(0, i - 1)].id;
-    P.history.commit('Elimina livello');
+    const d = P.doc;
+    const sel = new Set(d.selectedIds || [d.activeId]);
+    if (sel.size >= d.layers.length) {
+      P.util.toast('Il documento deve mantenere almeno un livello');
+      return;
+    }
+    const firstIdx = d.layers.findIndex(l => sel.has(l.id));
+    d.layers = d.layers.filter(l => !sel.has(l.id));
+    const nextLayer = d.layers[Math.max(0, Math.min(d.layers.length - 1, firstIdx - 1))];
+    d.activeId = nextLayer.id;
+    d.selectedIds = [nextLayer.id];
+    P.history.commit(sel.size > 1 ? 'Elimina livelli' : 'Elimina livello');
   },
   layerMove(dir) {
     P.app.cancelPending();
@@ -323,13 +376,39 @@ P.cmd = {
   },
   mergeDown() {
     P.app.cancelPending();
-    const d = P.doc, i = P.Doc.activeIndex();
+    const d = P.doc;
+    const sel = P.Doc.selectedLayers();
+    if (sel.length > 1) {
+      // Unisce tutti i livelli selezionati nel più basso tra i selezionati
+      const base = sel[0];
+      if (base.textData) base.textData = null;
+      const c = P.util.makeCanvas(d.width, d.height), x = c.getContext('2d');
+      for (const l of sel) {
+        if (!l.visible) continue;
+        x.globalAlpha = l.opacity;
+        x.drawImage(l.canvas, 0, 0);
+      }
+      x.globalAlpha = 1;
+      base.canvas = c;
+      base.opacity = 1;
+      P.Doc.markDirty(base);
+      const removeIds = new Set(sel.slice(1).map(l => l.id));
+      d.layers = d.layers.filter(l => !removeIds.has(l.id));
+      d.activeId = base.id;
+      d.selectedIds = [base.id];
+      P.history.commit('Unisci livelli selezionati');
+      return;
+    }
+    const i = P.Doc.activeIndex();
     if (i <= 0) { P.util.toast('Nessun livello sotto'); return; }
     const top = d.layers[i], below = d.layers[i - 1];
+    if (below.textData) below.textData = null;
     const c = P.util.cloneCanvas(below.canvas), x = c.getContext('2d');
     if (top.visible) { x.globalAlpha = top.opacity; x.drawImage(top.canvas, 0, 0); }
     below.canvas = c; P.Doc.markDirty(below);
-    d.layers.splice(i, 1); d.activeId = below.id;
+    d.layers.splice(i, 1);
+    d.activeId = below.id;
+    d.selectedIds = [below.id];
     P.history.commit('Unisci sotto');
   },
   flatten() {
@@ -337,7 +416,7 @@ P.cmd = {
     const d = P.doc;
     const l = P.Doc.createLayer('Sfondo', d.width, d.height);
     l.canvas = P.Doc.composite();
-    d.layers = [l]; d.activeId = l.id;
+    d.layers = [l]; d.activeId = l.id; d.selectedIds = [l.id];
     P.history.commit('Unisci tutto');
   }
 };
@@ -380,18 +459,30 @@ P.commands = {
   grayscale: { label: 'Bianco e nero', sc: ['Ctrl+Shift+U'], run: () => P.cmd.applyFilter('grayscale(1)', 'Bianco e nero'), enabled: hasDoc },
 
   'layer-new': { label: 'Nuovo livello', sc: ['Ctrl+Shift+N'], run: () => P.cmd.layerNew(), enabled: hasDoc },
+  'layer-text': { label: 'Nuovo livello di testo…', sc: ['T'], run: () => P.dialog.textEditor(), enabled: hasDoc },
+  'layer-edit-text': { label: 'Modifica testo livello…', run: () => P.dialog.textEditor({ layer: P.Doc.active() }), enabled: isTextLayer },
   'layer-duplicate': { label: 'Duplica livello', sc: ['Ctrl+J'], run: () => P.cmd.layerDuplicate(), enabled: hasDoc },
   'layer-delete': { label: 'Elimina livello', run: () => P.cmd.layerDelete(), enabled: hasDoc },
   'layer-up': { label: 'Sposta livello su', sc: ['Ctrl+]'], run: () => P.cmd.layerMove(1), enabled: hasDoc },
   'layer-down': { label: 'Sposta livello giù', sc: ['Ctrl+['], run: () => P.cmd.layerMove(-1), enabled: hasDoc },
-  'layer-merge-down': { label: 'Unisci sotto', sc: ['Ctrl+E'], run: () => P.cmd.mergeDown(), enabled: hasDoc },
+  'layer-merge-down': { label: 'Unisci selezionati / sotto', sc: ['Ctrl+E'], run: () => P.cmd.mergeDown(), enabled: hasDoc },
   flatten: { label: 'Unisci tutti i livelli', sc: ['Ctrl+Shift+E'], run: () => P.cmd.flatten(), enabled: hasDoc },
   layerFlipH: { label: 'Rifletti livello orizzontalmente', run: () => P.cmd.flip('h', true), enabled: hasDoc },
   layerFlipV: { label: 'Rifletti livello verticalmente', run: () => P.cmd.flip('v', true), enabled: hasDoc },
 
   selectAll: { label: 'Seleziona tutto', sc: ['Ctrl+A'], run: () => P.sel.selectAll(), enabled: hasDoc },
-  deselect: { label: 'Deseleziona', sc: ['Ctrl+D'], run: () => P.sel.clear(), enabled: hasSel },
+  deselect: { label: 'Deseleziona', sc: ['Ctrl+D'], run: () => { P.sel.clear(); P.util.status('Deselezionato'); }, enabled: hasSel },
   invertSel: { label: 'Inverti selezione', sc: ['Ctrl+Shift+I'], run: () => P.sel.invert(), enabled: hasDoc },
+  selectAllLayers: {
+    label: 'Seleziona tutti i livelli',
+    sc: ['Ctrl+Alt+A'],
+    run: () => {
+      if (!P.doc) return;
+      P.doc.selectedIds = P.doc.layers.map(l => l.id);
+      P.ui.updateLayers();
+    },
+    enabled: hasDoc
+  },
 
   zoomIn: { label: 'Aumenta zoom', sc: ['Ctrl+=', 'Ctrl++'], run: () => P.view.zoomAt(1.25), enabled: hasDoc },
   zoomOut: { label: 'Riduci zoom', sc: ['Ctrl+-'], run: () => P.view.zoomAt(0.8), enabled: hasDoc },

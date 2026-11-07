@@ -1,4 +1,4 @@
-// Photo299 - interfaccia: menu, barra strumenti, opzioni, pannelli
+// Photo299 - interfaccia: menu, menu contestuale tasto destro, barra strumenti, opzioni, pannelli
 'use strict';
 
 P.ui = {
@@ -6,8 +6,8 @@ P.ui = {
     { label: 'File', items: ['new', 'open', 'place', '-', 'save', 'saveAs', 'openProject', '-', 'export', 'quickPng', '-', 'clearCache', '-', 'quit'] },
     { label: 'Modifica', items: ['undo', 'redo', '-', 'cut', 'copy', 'copyMerged', 'paste', 'clear', '-', 'fillFg', 'fillBg', '-', 'freeTransform'] },
     { label: 'Immagine', items: ['imageSize', 'canvasSize', 'cropSel', 'trim', '-', 'rotCW', 'rotCCW', 'rot180', 'flipH', 'flipV', '-', 'adjust', 'invertColors', 'grayscale'] },
-    { label: 'Livello', items: ['layer-new', 'layer-duplicate', 'layer-delete', '-', 'layer-up', 'layer-down', '-', 'layer-merge-down', 'flatten', '-', 'layerFlipH', 'layerFlipV'] },
-    { label: 'Selezione', items: ['selectAll', 'deselect', 'invertSel'] },
+    { label: 'Livello', items: ['layer-new', 'layer-text', 'layer-edit-text', 'layer-duplicate', 'layer-delete', '-', 'layer-up', 'layer-down', '-', 'layer-merge-down', 'flatten', '-', 'layerFlipH', 'layerFlipV'] },
+    { label: 'Selezione', items: ['selectAll', 'deselect', 'invertSel', '-', 'selectAllLayers'] },
     { label: 'Visualizza', items: ['zoomIn', 'zoomOut', 'fit', 'actual', '-', 'fullscreen', 'devtools'] },
     { label: 'Aiuto', items: ['shortcuts', 'about'] }
   ],
@@ -23,13 +23,20 @@ P.ui = {
     document.querySelectorAll('[data-cmd]').forEach(b => b.addEventListener('click', () => P.run(b.dataset.cmd)));
   },
 
-  // ---------- Menu ----------
+  // ---------- Menu superiore ----------
   buildMenus() {
     const nav = document.getElementById('menus');
     const dd = document.getElementById('menu-dropdown');
+    const ctxMenu = document.getElementById('context-menu');
     let openIdx = -1;
-    const close = () => { dd.classList.add('hidden'); nav.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open')); openIdx = -1; };
+    const close = () => {
+      dd.classList.add('hidden');
+      if (ctxMenu) ctxMenu.classList.add('hidden');
+      nav.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+      openIdx = -1;
+    };
     const open = (i, el) => {
+      if (ctxMenu) ctxMenu.classList.add('hidden');
       openIdx = i;
       nav.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
       el.classList.add('open');
@@ -55,9 +62,94 @@ P.ui = {
       el.addEventListener('mouseenter', () => { if (openIdx >= 0 && openIdx !== i) open(i, el); });
       nav.appendChild(el);
     });
-    document.addEventListener('mousedown', e => { if (!dd.contains(e.target)) close(); });
+    document.addEventListener('mousedown', e => {
+      if (!dd.contains(e.target) && (!ctxMenu || !ctxMenu.contains(e.target))) close();
+    });
     window.addEventListener('blur', close);
     this.closeMenus = close;
+  },
+
+  // ---------- Menu contestuale tasto destro ----------
+  openContextMenu(clientX, clientY, docPt) {
+    const cm = document.getElementById('context-menu');
+    if (!cm || !P.doc) return;
+    this.closeMenus();
+    cm.innerHTML = '';
+
+    const addItem = (label, sc, fn, enabled = true) => {
+      const it = document.createElement('div');
+      it.className = 'dd-item' + (enabled ? '' : ' disabled');
+      it.innerHTML = `<span>${label}</span><span class="sc">${sc || ''}</span>`;
+      if (enabled) {
+        it.addEventListener('click', () => {
+          cm.classList.add('hidden');
+          fn();
+        });
+      }
+      cm.appendChild(it);
+    };
+    const addCmd = id => {
+      const c = P.commands[id]; if (!c) return;
+      const en = !c.enabled || c.enabled();
+      addItem(c.label, c.sc ? c.sc[0] : '', () => P.run(id), en);
+    };
+    const addSep = () => cm.insertAdjacentHTML('beforeend', '<div class="dd-sep"></div>');
+    const addHead = txt => cm.insertAdjacentHTML('beforeend', `<div class="dd-head">${txt}</div>`);
+
+    // 1. Se Trasformazione Libera è attiva
+    if (P.transform.active) {
+      addHead('Trasformazione libera');
+      addItem('✓ Conferma trasformazione', 'Invio', () => P.transform.commit());
+      addItem('✗ Annulla trasformazione', 'Esc', () => P.transform.cancel());
+      addSep();
+      addItem('↔ Rifletti orizzontale', '', () => { P.transform.flip('h'); this.updateTransformFields(); });
+      addItem('↕ Rifletti verticale', '', () => { P.transform.flip('v'); this.updateTransformFields(); });
+      addItem('⟳ Ruota 90° orario', '', () => P.transform.rotateBy(90));
+      addItem('⟲ Ruota 90° antiorario', '', () => P.transform.rotateBy(-90));
+    } else {
+      // 2. Opzioni Selezione (sempre in primo piano quando c'è una selezione o per selezionare tutto)
+      addHead('Selezione');
+      addCmd('deselect');
+      addCmd('selectAll');
+      addCmd('invertSel');
+      if (P.sel.active) {
+        addCmd('cropSel');
+      }
+
+      addSep();
+      addHead('Azioni rapide');
+      addCmd('freeTransform');
+      const activeLayer = P.Doc.active();
+      if (activeLayer && activeLayer.textData) {
+        addCmd('layer-edit-text');
+      }
+      addItem('Inserisci testo qui…', 'T', () => {
+        const x = docPt ? Math.round(docPt.x) : Math.round(P.doc.width / 2);
+        const y = docPt ? Math.round(docPt.y) : Math.round(P.doc.height / 2);
+        P.dialog.textEditor({ x, y });
+      });
+
+      addSep();
+      addCmd('cut');
+      addCmd('copy');
+      addCmd('paste');
+      addCmd('clear');
+      addCmd('fillFg');
+
+      addSep();
+      addHead('Livelli (' + P.Doc.selectedLayers().length + ' selezionat' + (P.Doc.selectedLayers().length === 1 ? 'o' : 'i') + ')');
+      addCmd('layer-new');
+      addCmd('layer-duplicate');
+      addCmd('layer-merge-down');
+      addCmd('layer-delete');
+    }
+
+    cm.classList.remove('hidden');
+    const rect = cm.getBoundingClientRect();
+    const x = Math.min(clientX, window.innerWidth - rect.width - 8);
+    const y = Math.min(clientY, window.innerHeight - rect.height - 8);
+    cm.style.left = Math.max(4, x) + 'px';
+    cm.style.top = Math.max(4, y) + 'px';
   },
 
   // ---------- Strumenti ----------
@@ -97,13 +189,53 @@ P.ui = {
     const t = P.tools.current; if (!t) return;
     bar.appendChild(this.html(`<span class="opt-title">${t.name}</span>`));
     const S = P.settings;
+
     if (t.id === 'brush' || t.id === 'eraser') {
       const o = t.id === 'brush' ? S.brush : S.eraser;
-      bar.appendChild(this.slider('Dimensione', o, 'size', 1, 500, 'px'));
+      // Selettore pattern del pennello
+      const patBar = this.html('<div class="pattern-bar" title="Forma / Pattern punta pennello"></div>');
+      for (const p of P.BRUSH_PATTERNS) {
+        const b = this.html(`<button class="pat-btn${o.pattern === p.id ? ' active' : ''}">${p.label}</button>`);
+        b.addEventListener('click', () => {
+          o.pattern = p.id;
+          this.updateOptions();
+          P.render.request();
+        });
+        patBar.appendChild(b);
+      }
+      bar.appendChild(patBar);
+      bar.appendChild(this.slider('Dim', o, 'size', 1, 500, 'px'));
       bar.appendChild(this.slider('Durezza', o, 'hardness', 0, 100, '%'));
       bar.appendChild(this.slider('Opacità', o, 'opacity', 1, 100, '%'));
-      bar.appendChild(this.html('<span class="hint">[ ] dimensione · Maiusc+clic = linea retta</span>'));
     }
+
+    if (t.id === 'text') {
+      const ts = S.text;
+      const fontSel = this.html(`<select title="Carattere">${P.FONTS.map(f => `<option value="${f}" ${ts.font === f ? 'selected' : ''}>${f.split(',')[0]}</option>`).join('')}</select>`);
+      fontSel.addEventListener('change', () => { ts.font = fontSel.value; });
+      bar.appendChild(fontSel);
+      bar.appendChild(this.slider('Dim', ts, 'size', 8, 400, 'px'));
+
+      const bBold = this.html(`<button class="btn small${ts.bold ? ' active' : ''}" title="Grassetto"><b>B</b></button>`);
+      bBold.addEventListener('click', () => { ts.bold = !ts.bold; this.updateOptions(); });
+      const bItalic = this.html(`<button class="btn small${ts.italic ? ' active' : ''}" title="Corsivo"><i>I</i></button>`);
+      bItalic.addEventListener('click', () => { ts.italic = !ts.italic; this.updateOptions(); });
+      bar.appendChild(bBold);
+      bar.appendChild(bItalic);
+
+      const newTxtBtn = this.html('<button class="btn small primary">＋ Nuovo testo al centro</button>');
+      newTxtBtn.addEventListener('click', () => P.run('layer-text'));
+      bar.appendChild(newTxtBtn);
+
+      const act = P.Doc.active();
+      if (act && act.textData) {
+        const editBtn = this.html('<button class="btn small">✎ Modifica testo selezionato</button>');
+        editBtn.addEventListener('click', () => P.dialog.textEditor({ layer: act }));
+        bar.appendChild(editBtn);
+      }
+      bar.appendChild(this.html('<span class="hint">Clicca sul foglio per aggiungere o modificare un testo</span>'));
+    }
+
     if (['rect', 'ellipse', 'lasso', 'wand'].includes(t.id)) {
       const modes = [['new', 'Nuova'], ['add', 'Aggiungi'], ['sub', 'Sottrai'], ['intersect', 'Interseca']];
       const w = this.html('<div class="opt"></div>');
@@ -114,14 +246,31 @@ P.ui = {
       }
       bar.appendChild(w);
     }
+
     if (['wand', 'magic', 'bucket'].includes(t.id)) {
       bar.appendChild(this.slider('Tolleranza', S, 'tolerance', 0, 255));
       const c = this.html(`<label class="opt"><input type="checkbox" ${S.contiguous ? 'checked' : ''}> Contigui</label>`);
       c.querySelector('input').addEventListener('change', e => { S.contiguous = e.target.checked; });
       bar.appendChild(c);
     }
-    if (['rect', 'ellipse', 'lasso', 'wand'].includes(t.id)) bar.appendChild(this.html('<span class="hint">Maiusc = aggiungi · Alt = sottrai</span>'));
-    if (t.id === 'move') bar.appendChild(this.html('<span class="hint">Trascina per spostare il livello o la selezione · Ctrl+T per trasformazione libera</span>'));
+
+    if (['rect', 'ellipse', 'lasso', 'wand'].includes(t.id)) {
+      const deselBtn = this.html('<button class="btn small">Deseleziona (Ctrl+D)</button>');
+      deselBtn.addEventListener('click', () => P.run('deselect'));
+      bar.appendChild(deselBtn);
+      bar.appendChild(this.html('<span class="hint">Clic vuoto o Tasto destro → Deseleziona</span>'));
+    }
+
+    if (t.id === 'move') {
+      const auto = this.html(`<label class="opt"><input type="checkbox" ${S.autoSelect ? 'checked' : ''}> Selezione automatica livello</label>`);
+      auto.querySelector('input').addEventListener('change', e => { S.autoSelect = e.target.checked; });
+      bar.appendChild(auto);
+      const tfBtn = this.html('<button class="btn small">Trasformazione libera (Ctrl+T)</button>');
+      tfBtn.addEventListener('click', () => P.run('freeTransform'));
+      bar.appendChild(tfBtn);
+      bar.appendChild(this.html('<span class="hint">Ctrl+clic = seleziona più elementi insieme</span>'));
+    }
+
     if (t.id === 'picker') bar.appendChild(this.html('<span class="hint">Clic = colore primo piano · Alt+clic = colore di sfondo</span>'));
     if (t.id === 'crop') {
       if (t.rect) {
@@ -142,7 +291,8 @@ P.ui = {
 
   transformOptions(bar) {
     const s = P.transform.s;
-    bar.appendChild(this.html(`<span class="opt-title">${s.moveOnly ? 'Sposta' : 'Trasformazione libera'}</span>`));
+    const count = s.items ? s.items.length : 1;
+    bar.appendChild(this.html(`<span class="opt-title">${s.moveOnly ? 'Sposta' : 'Trasforma'} (${count} liv.)</span>`));
     const f = this.html(`<div class="opt">
       <span>L</span><input id="tf-w" type="number" step="1">%
       <span>A</span><input id="tf-h" type="number" step="1">%
@@ -157,7 +307,6 @@ P.ui = {
     const ok = this.html('<button class="btn small primary">✓ Conferma (Invio)</button>'); ok.addEventListener('click', () => P.transform.commit());
     const ko = this.html('<button class="btn small">✗ Annulla (Esc)</button>'); ko.addEventListener('click', () => P.transform.cancel());
     bar.appendChild(ok); bar.appendChild(ko);
-    bar.appendChild(this.html('<span class="hint">Angoli = proporzionale (Maiusc = libero) · fuori dal riquadro = ruota</span>'));
     this.updateTransformFields();
   },
   updateTransformFields() {
@@ -202,13 +351,13 @@ P.ui = {
     P.render.request();
   },
 
-  // ---------- Livelli ----------
+  // ---------- Livelli (con selezione multipla Ctrl+clic e Shift+clic) ----------
   thumbs: new Map(),
   bindLayersPanel() {
     const op = document.getElementById('layer-opacity');
     op.addEventListener('input', () => {
-      const l = P.Doc.active(); if (!l) return;
-      l.opacity = op.value / 100;
+      const sel = P.Doc.selectedLayers(); if (!sel.length) return;
+      for (const l of sel) l.opacity = op.value / 100;
       document.getElementById('layer-opacity-val').textContent = op.value + '%';
       P.render.requestContent();
     });
@@ -216,14 +365,24 @@ P.ui = {
   },
   updateLayers() {
     const list = document.getElementById('layers-list');
+    const countSpan = document.getElementById('layers-sel-count');
     list.innerHTML = '';
-    const d = P.doc; if (!d) return;
+    const d = P.doc;
+    if (!d) { if (countSpan) countSpan.textContent = ''; return; }
+    P.Doc.ensureSelection();
     const active = P.Doc.active();
+    const selCount = d.selectedIds.length;
+    if (countSpan) countSpan.textContent = selCount > 1 ? `(${selCount} selezionati)` : '';
+
     const ids = new Set();
     for (let i = d.layers.length - 1; i >= 0; i--) {
       const l = d.layers[i]; ids.add(l.id);
+      const isAct = l === active;
+      const isSel = P.Doc.isSelected(l.id);
       const row = document.createElement('div');
-      row.className = 'layer' + (l === active ? ' active' : '');
+      row.className = 'layer' + (isAct ? ' active' : isSel ? ' selected' : '');
+      row.title = 'Clic = seleziona · Ctrl+clic = selezione multipla · Maiusc+clic = intervallo';
+
       let th = this.thumbs.get(l.id);
       if (!th) { th = P.util.makeCanvas(80, 60); this.thumbs.set(l.id, th); l.thumbDirty = true; }
       if (l.thumbDirty) {
@@ -236,19 +395,55 @@ P.ui = {
       const eye = document.createElement('span');
       eye.className = 'eye' + (l.visible ? '' : ' off'); eye.textContent = '👁'; eye.title = 'Mostra/nascondi';
       eye.addEventListener('click', e => { e.stopPropagation(); l.visible = !l.visible; P.history.commit(l.visible ? 'Mostra livello' : 'Nascondi livello'); });
+
       const name = document.createElement('span');
-      name.className = 'name'; name.textContent = l.name + (l.opacity < 1 ? ` (${Math.round(l.opacity * 100)}%)` : '');
-      name.title = 'Doppio clic per rinominare';
+      name.className = 'name';
+      name.textContent = l.name + (l.opacity < 1 ? ` (${Math.round(l.opacity * 100)}%)` : '');
+      name.title = l.textData ? 'Doppio clic per modificare il testo' : 'Doppio clic per rinominare';
       name.addEventListener('dblclick', e => {
         e.stopPropagation();
+        if (l.textData) {
+          P.Doc.selectLayer(l.id);
+          this.updateLayers();
+          P.dialog.textEditor({ layer: l });
+          return;
+        }
         const inp = document.createElement('input'); inp.value = l.name;
         name.innerHTML = ''; name.appendChild(inp); inp.focus(); inp.select();
         const done = ok => { if (ok && inp.value.trim() && inp.value !== l.name) { l.name = inp.value.trim(); P.history.commit('Rinomina livello'); } else this.updateLayers(); };
         inp.addEventListener('keydown', ev => { ev.stopPropagation(); if (ev.key === 'Enter') done(true); if (ev.key === 'Escape') done(false); });
         inp.addEventListener('blur', () => done(true));
       });
-      row.appendChild(eye); row.appendChild(th); row.appendChild(name);
-      row.addEventListener('click', () => { if (d.activeId !== l.id) { P.app.cancelPending(); d.activeId = l.id; this.updateLayers(); } });
+
+      row.appendChild(eye);
+      row.appendChild(th);
+      if (l.textData) {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = 'T';
+        badge.title = 'Livello di testo modificabile (doppio clic per cambiare testo)';
+        badge.addEventListener('click', e => {
+          e.stopPropagation();
+          P.Doc.selectLayer(l.id);
+          this.updateLayers();
+          P.dialog.textEditor({ layer: l });
+        });
+        row.appendChild(badge);
+      }
+      row.appendChild(name);
+
+      row.addEventListener('click', e => {
+        P.app.cancelPending();
+        if (e.ctrlKey || e.metaKey) {
+          P.Doc.selectLayer(l.id, { toggle: true });
+        } else if (e.shiftKey) {
+          P.Doc.selectLayer(l.id, { range: true });
+        } else {
+          P.Doc.selectLayer(l.id);
+        }
+        this.updateLayers();
+        this.updateOptions();
+      });
       list.appendChild(row);
     }
     for (const k of [...this.thumbs.keys()]) if (!ids.has(k)) this.thumbs.delete(k);
@@ -280,7 +475,8 @@ P.ui = {
   updateStatus() {
     document.getElementById('status-zoom').textContent = 'Zoom ' + Math.round(P.view.zoom * 100) + '%';
     const d = P.doc;
-    document.getElementById('status-size').textContent = d ? `${d.width} × ${d.height} px · ${d.layers.length} livell${d.layers.length === 1 ? 'o' : 'i'}` : '—';
+    const selN = d && d.selectedIds ? d.selectedIds.length : 1;
+    document.getElementById('status-size').textContent = d ? `${d.width} × ${d.height} px · ${d.layers.length} liv.${selN > 1 ? ` (${selN} sel.)` : ''}` : '—';
     const m = P.view.mouseDoc;
     document.getElementById('status-pos').textContent = d && m && P.view.mouseIn ? `X ${Math.floor(m.x)}  Y ${Math.floor(m.y)}` : '';
   },

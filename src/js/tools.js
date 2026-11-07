@@ -1,14 +1,39 @@
-// Photo299 - strumenti
+// Photo299 - strumenti, pattern di pennello e strumento testo
 'use strict';
 
 P.colors = { fg: '#000000', bg: '#ffffff' };
 
+P.BRUSH_PATTERNS = [
+  { id: 'round', label: 'Tondo' },
+  { id: 'soft', label: 'Aerografo' },
+  { id: 'square', label: 'Quadrato' },
+  { id: 'calligraphy', label: 'Calligrafico' },
+  { id: 'spray', label: 'Spray' },
+  { id: 'chalk', label: 'Gesso' },
+  { id: 'star', label: 'Stella' },
+  { id: 'pixel', label: 'Pixel' }
+];
+
+P.FONTS = [
+  'Segoe UI, sans-serif',
+  'Arial, sans-serif',
+  'Impact, sans-serif',
+  'Georgia, serif',
+  'Times New Roman, serif',
+  'Courier New, monospace',
+  'Verdana, sans-serif',
+  'Trebuchet MS, sans-serif',
+  'Comic Sans MS, cursive'
+];
+
 P.settings = {
-  brush: { size: 20, hardness: 80, opacity: 100 },
-  eraser: { size: 40, hardness: 90, opacity: 100 },
+  brush: { size: 22, hardness: 85, opacity: 100, pattern: 'round' },
+  eraser: { size: 40, hardness: 90, opacity: 100, pattern: 'round' },
+  text: { font: 'Segoe UI, sans-serif', size: 54, bold: true, italic: false, align: 'left', strokeWidth: 0, strokeColor: '#000000' },
   tolerance: 32,
   contiguous: true,
-  selMode: 'new'
+  selMode: 'new',
+  autoSelect: true
 };
 
 const ICONS = {
@@ -22,6 +47,7 @@ const ICONS = {
   eraser: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M16 3l5 5-11 11H5l-3-3z"/><path d="M9 10l5 5M5 19h15"/></svg>',
   magic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14 5l5 5-9 9H6l-3-3z"/><path d="M19 2v3M17.5 3.5h3M22 7l-1 1"/></svg>',
   bucket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 3l8 8-7 7-8-8z"/><path d="M3 10h15"/><path d="M20 14s2 3 2 4.5a2 2 0 01-4 0c0-1.5 2-4.5 2-4.5z"/></svg>',
+  text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><path d="M12 4v16"/><path d="M8 20h8"/></svg>',
   picker: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6M17 7l3-3a1.4 1.4 0 00-3-3l-3 3"/><path d="M15 9L5 19l-2 2 2-2v-3L13 7"/></svg>',
   hand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V3.5a1.5 1.5 0 013 0V11M14 11V5a1.5 1.5 0 013 0v7M17 9a1.5 1.5 0 013 0v5a8 8 0 01-8 8h-1a7 7 0 01-6-3l-3-5a1.5 1.5 0 012.5-1.6L8 15"/></svg>',
   zoom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="7"/><path d="M15 15l6 6M7 10h6M10 7v6"/></svg>'
@@ -76,31 +102,123 @@ function requireLayer() {
   return l;
 }
 
-// ---- Pennello / Gomma ----
+// ---- Generatore di punte e pattern del pennello ----
 const dabCache = new Map();
-function getDab(size, hardness, color) {
-  const key = size + '|' + hardness + '|' + color;
-  let c = dabCache.get(key);
-  if (c) return c;
-  if (dabCache.size > 200) dabCache.clear();
+
+function buildStarPath(ctx, cx, cy, spikes, outerR, innerR) {
+  let rot = Math.PI / 2 * 3;
+  const step = Math.PI / spikes;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - outerR);
+  for (let i = 0; i < spikes; i++) {
+    ctx.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
+    rot += step;
+    ctx.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR);
+    rot += step;
+  }
+  ctx.closePath();
+}
+
+function getDab(size, hardness, color, pattern = 'round') {
+  // Per spray e gesso non usiamo cache statica perché hanno texture stocastica viva
+  const dynamic = pattern === 'spray' || pattern === 'chalk';
+  const key = `${size}|${hardness}|${color}|${pattern}`;
+  if (!dynamic && dabCache.has(key)) return dabCache.get(key);
+  if (dabCache.size > 240) dabCache.clear();
+
   const d = Math.max(1, Math.ceil(size));
-  c = P.util.makeCanvas(d, d);
+  const c = P.util.makeCanvas(d, d);
   const ctx = c.getContext('2d');
   const r = size / 2;
+  const cx = d / 2, cy = d / 2;
   const { r: R, g: G, b: B } = P.util.hexToRgb(color);
-  if (hardness >= 99 || size <= 2) {
-    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(d / 2, d / 2, Math.max(0.5, r), 0, Math.PI * 2); ctx.fill();
-  } else {
-    const g = ctx.createRadialGradient(d / 2, d / 2, 0, d / 2, d / 2, r);
-    g.addColorStop(0, `rgba(${R},${G},${B},1)`);
-    g.addColorStop(Math.min(0.99, hardness / 100), `rgba(${R},${G},${B},1)`);
+
+  if (pattern === 'pixel') {
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, d, d);
+  } else if (pattern === 'square') {
+    ctx.fillStyle = color;
+    if (hardness >= 95 || size <= 3) {
+      ctx.fillRect(0, 0, d, d);
+    } else {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * Math.SQRT2);
+      g.addColorStop(0, `rgba(${R},${G},${B},1)`);
+      g.addColorStop(Math.min(0.95, hardness / 100), `rgba(${R},${G},${B},1)`);
+      g.addColorStop(1, `rgba(${R},${G},${B},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, d, d);
+    }
+  } else if (pattern === 'calligraphy') {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-Math.PI / 4); // angolo penna calligrafica 45°
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, Math.max(1, r), Math.max(0.8, r * 0.24), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  } else if (pattern === 'star') {
+    ctx.fillStyle = color;
+    buildStarPath(ctx, cx, cy, 5, Math.max(1, r), Math.max(0.5, r * 0.45));
+    ctx.fill();
+  } else if (pattern === 'spray') {
+    ctx.fillStyle = color;
+    const count = Math.max(8, Math.round(size * size * 0.16));
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = Math.pow(Math.random(), 0.7) * r;
+      const px = cx + Math.cos(ang) * dist;
+      const py = cy + Math.sin(ang) * dist;
+      ctx.fillRect(px, py, 1.3, 1.3);
+    }
+  } else if (pattern === 'chalk') {
+    const img = ctx.createImageData(d, d);
+    const data = img.data;
+    for (let y = 0; y < d; y++) {
+      for (let x = 0; x < d; x++) {
+        const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+        if (dist <= r) {
+          const edge = 1 - Math.pow(dist / Math.max(1, r), 1.8);
+          if (Math.random() < edge * 0.72) {
+            const idx = (y * d + x) * 4;
+            data[idx] = R; data[idx + 1] = G; data[idx + 2] = B;
+            data[idx + 3] = Math.round(255 * (0.45 + Math.random() * 0.55));
+          }
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  } else if (pattern === 'soft') {
+    // Aerografo molto morbido
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, `rgba(${R},${G},${B},0.55)`);
+    g.addColorStop(0.4, `rgba(${R},${G},${B},0.22)`);
     g.addColorStop(1, `rgba(${R},${G},${B},0)`);
-    ctx.fillStyle = g; ctx.fillRect(0, 0, d, d);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, d, d);
+  } else {
+    // 'round' (default)
+    if (hardness >= 99 || size <= 2) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(0.5, r), 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, `rgba(${R},${G},${B},1)`);
+      g.addColorStop(Math.min(0.99, hardness / 100), `rgba(${R},${G},${B},1)`);
+      g.addColorStop(1, `rgba(${R},${G},${B},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, d, d);
+    }
   }
-  dabCache.set(key, c);
+
+  if (!dynamic) dabCache.set(key, c);
   return c;
 }
 
+// ---- Pennello e Gomma ----
 function makePaintTool(id, name, key, mode) {
   return {
     id, name, key, icon: ICONS[mode === 'erase' ? 'eraser' : 'brush'], cursor: 'none',
@@ -109,13 +227,15 @@ function makePaintTool(id, name, key, mode) {
     dab(x, y, pressure) {
       const o = this.opts;
       const size = Math.max(1, Math.round(o.size * pressure));
-      const img = getDab(size, o.hardness, mode === 'erase' ? '#000000' : P.colors.fg);
+      const pat = o.pattern || 'round';
+      const img = getDab(size, o.hardness, mode === 'erase' ? '#000000' : P.colors.fg, pat);
       const ctx = this.stroke.getContext('2d');
-      const px = x - img.width / 2, py = y - img.height / 2;
+      const px = pat === 'pixel' ? Math.floor(x - img.width / 2) : (x - img.width / 2);
+      const py = pat === 'pixel' ? Math.floor(y - img.height / 2) : (y - img.height / 2);
       ctx.drawImage(img, px, py);
       if (P.sel.active) {
-        const bx = Math.max(0, Math.floor(px) - 1), by = Math.max(0, Math.floor(py) - 1);
-        const bw = Math.min(this.stroke.width - bx, img.width + 2), bh = Math.min(this.stroke.height - by, img.height + 2);
+        const bx = Math.max(0, Math.floor(px) - 2), by = Math.max(0, Math.floor(py) - 2);
+        const bw = Math.min(this.stroke.width - bx, img.width + 4), bh = Math.min(this.stroke.height - by, img.height + 4);
         if (bw > 0 && bh > 0) {
           ctx.globalCompositeOperation = 'destination-in';
           ctx.drawImage(P.sel.mask, bx, by, bw, bh, bx, by, bw, bh);
@@ -124,23 +244,37 @@ function makePaintTool(id, name, key, mode) {
       }
     },
     segment(a, b, pressure) {
-      const step = Math.max(0.5, this.opts.size * pressure * 0.12);
+      const pat = this.opts.pattern || 'round';
+      const spacingFactor = pat === 'calligraphy' ? 0.06 : pat === 'pixel' ? 0.25 : 0.1;
+      const step = Math.max(0.5, this.opts.size * pressure * spacingFactor);
       const dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
+      if (dist <= 0.001) return;
       let t = step - this.rest;
-      while (t <= dist) { this.dab(a.x + dx * t / dist, a.y + dy * t / dist, pressure); t += step; }
+      while (t <= dist) {
+        this.dab(a.x + dx * t / dist, a.y + dy * t / dist, pressure);
+        t += step;
+      }
       this.rest = dist - (t - step);
     },
-    pressure(e) { return e.pointerType === 'pen' && e.pressure > 0 ? Math.max(0.05, e.pressure) : 1; },
+    pressure(e) {
+      return (e && e.pointerType === 'pen' && e.pressure > 0) ? Math.max(0.08, e.pressure) : 1;
+    },
     down(pt, e) {
       const layer = requireLayer(); if (!layer) return;
+      // Se era un livello di testo e ci si dipinge sopra, diventa livello raster normale
+      if (layer.textData) layer.textData = null;
       const d = P.doc;
       this.layer = layer;
       this.stroke = P.util.makeCanvas(d.width, d.height);
       this.rest = 0;
       const pr = this.pressure(e);
-      if (e.shiftKey && this.lastEnd) { this.dab(this.lastEnd.x, this.lastEnd.y, pr); this.segment(this.lastEnd, pt, pr); }
-      else this.dab(pt.x, pt.y, pr);
-      this.last = pt;
+      if (e && e.shiftKey && this.lastEnd) {
+        this.dab(this.lastEnd.x, this.lastEnd.y, pr);
+        this.segment(this.lastEnd, pt, pr);
+      } else {
+        this.dab(pt.x, pt.y, pr);
+      }
+      this.last = { x: pt.x, y: pt.y };
       const alpha = this.opts.opacity / 100;
       P.render.override = {
         layerId: layer.id,
@@ -156,10 +290,19 @@ function makePaintTool(id, name, key, mode) {
     },
     move(pt, e) {
       P.render.request();
-      if (!this.stroke) return;
-      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
-      const pts = events.length > 1 ? events.map(ev => P.view.eventToDoc(ev)) : [pt];
-      for (const p of pts) { this.segment(this.last, p, this.pressure(e)); this.last = p; }
+      if (!this.stroke || !this.last) return;
+      const pr = this.pressure(e);
+      let pts = [pt];
+      if (e && typeof e.getCoalescedEvents === 'function') {
+        const coalesced = e.getCoalescedEvents();
+        if (coalesced && coalesced.length > 1) {
+          pts = coalesced.map(ev => P.view.eventToDoc(ev));
+        }
+      }
+      for (const p of pts) {
+        this.segment(this.last, p, pr);
+        this.last = { x: p.x, y: p.y };
+      }
       P.render.requestContent();
     },
     up(pt) {
@@ -170,21 +313,48 @@ function makePaintTool(id, name, key, mode) {
       ctx.drawImage(this.stroke, 0, 0);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
       P.Doc.markDirty(this.layer);
-      this.stroke = null; P.render.override = null;
-      this.lastEnd = pt;
+      this.stroke = null;
+      this.last = null;
+      P.render.override = null;
+      if (pt) this.lastEnd = { x: pt.x, y: pt.y };
       P.history.commit(mode === 'erase' ? 'Gomma' : 'Pennello');
     },
-    cancel() { if (this.stroke) { this.stroke = null; P.render.override = null; P.render.requestContent(); } },
+    cancel() {
+      if (this.stroke) {
+        this.stroke = null;
+        this.last = null;
+        P.render.override = null;
+        P.render.requestContent();
+      }
+    },
     overlay(ctx) {
       const pt = P.view.mouseDoc; if (!pt || !P.view.mouseIn) return;
       const p = P.view.docToScreen(pt);
       const r = Math.max(1, this.opts.size * P.view.zoom / 2);
+      const pat = this.opts.pattern || 'round';
       ctx.save();
-      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.beginPath();
+      if (pat === 'square' || pat === 'pixel') {
+        ctx.rect(p.x - r, p.y - r, r * 2, r * 2);
+      } else if (pat === 'calligraphy') {
+        ctx.translate(p.x, p.y);
+        ctx.rotate(-Math.PI / 4);
+        ctx.ellipse(0, 0, r, Math.max(1, r * 0.24), 0, 0, Math.PI * 2);
+      } else {
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      }
+      ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.lineWidth = 2.5; ctx.stroke();
       ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 1; ctx.stroke();
-      if (r < 4) { ctx.beginPath(); ctx.moveTo(p.x - 6, p.y); ctx.lineTo(p.x + 6, p.y); ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x, p.y + 6); ctx.stroke(); }
       ctx.restore();
+      if (r < 4) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,.9)';
+        ctx.beginPath();
+        ctx.moveTo(p.x - 5, p.y); ctx.lineTo(p.x + 5, p.y);
+        ctx.moveTo(p.x, p.y - 5); ctx.lineTo(p.x, p.y + 5);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
   };
 }
@@ -194,7 +364,11 @@ function makeShapeSelectTool(id, name, key, type, icon) {
   return {
     id, name, key, icon, cursor: 'crosshair',
     start: null, cur: null, pts: null, mode: 'new', downScreen: null,
-    down(pt, e) { this.mode = selModeFromEvent(e); this.start = pt; this.cur = pt; this.pts = [pt]; this.downScreen = { x: e.clientX, y: e.clientY }; },
+    down(pt, e) {
+      this.mode = selModeFromEvent(e);
+      this.start = pt; this.cur = pt; this.pts = [pt];
+      this.downScreen = { x: e.clientX, y: e.clientY };
+    },
     constrained(e) {
       let b = this.cur;
       if (type !== 'lasso' && e && e.shiftKey && this.mode === 'new') {
@@ -214,7 +388,9 @@ function makeShapeSelectTool(id, name, key, type, icon) {
       this.cur = pt;
       const moved = Math.hypot(e.clientX - this.downScreen.x, e.clientY - this.downScreen.y) > 3;
       if (!moved || (type === 'lasso' && this.pts.length < 3)) {
-        if (this.mode === 'new') P.sel.clear();
+        // Clic singolo senza trascinamento -> deseleziona immediatamente!
+        P.sel.clear();
+        P.util.status('Selezione annullata');
       } else {
         const shape = type === 'lasso' ? P.sel.shapeCanvas('poly', this.pts) : P.sel.shapeCanvas(type, [this.start, this.constrained(e)]);
         P.sel.apply(shape, this.mode);
@@ -259,8 +435,26 @@ P.tools = {
 
 P.tools.list = [
   {
-    id: 'move', name: 'Sposta', key: 'V', icon: ICONS.move, cursor: 'move',
-    down(pt) { if (!requireLayer()) return; P.transform.begin({ moveOnly: true }); if (P.transform.active) P.transform.down(pt); },
+    id: 'move', name: 'Sposta e Seleziona Livelli', key: 'V', icon: ICONS.move, cursor: 'move',
+    down(pt, e) {
+      if (!P.doc) return;
+      // Se non c'è una selezione pixel attiva, permette di selezionare i livelli cliccandoli sul canvas
+      if (!P.sel.active && (e.ctrlKey || e.metaKey || P.settings.autoSelect)) {
+        const hitLayer = P.Doc.layerAtPoint(pt.x, pt.y);
+        if (hitLayer) {
+          if (e.ctrlKey || e.metaKey) {
+            P.Doc.selectLayer(hitLayer.id, { toggle: true });
+            P.ui.updateLayers();
+          } else if (!P.Doc.isSelected(hitLayer.id)) {
+            P.Doc.selectLayer(hitLayer.id);
+            P.ui.updateLayers();
+          }
+        }
+      }
+      if (!requireLayer()) return;
+      P.transform.begin({ moveOnly: true });
+      if (P.transform.active) P.transform.down(pt);
+    },
     move() {}, up() {}
   },
   makeShapeSelectTool('rect', 'Selezione rettangolare', 'M', 'rect', ICONS.rect),
@@ -271,6 +465,10 @@ P.tools.list = [
     down(pt, e) {
       const l = P.Doc.active(); if (!l) return;
       const d = P.doc;
+      if (pt.x < 0 || pt.y < 0 || pt.x >= d.width || pt.y >= d.height) {
+        P.sel.clear();
+        return;
+      }
       const img = l.canvas.getContext('2d').getImageData(0, 0, d.width, d.height);
       const m = P.floodMask(img, d.width, d.height, pt.x, pt.y, P.settings.tolerance, P.settings.contiguous);
       P.sel.apply(P.sel.fromMaskArray(m, d.width, d.height), selModeFromEvent(e));
@@ -319,6 +517,7 @@ P.tools.list = [
     id: 'magic', name: 'Gomma magica', key: 'Shift+E', icon: ICONS.magic, cursor: 'crosshair',
     down(pt) {
       const l = requireLayer(); if (!l) return;
+      if (l.textData) l.textData = null;
       const d = P.doc, ctx = l.canvas.getContext('2d');
       const img = ctx.getImageData(0, 0, d.width, d.height);
       const m = P.floodMask(img, d.width, d.height, pt.x, pt.y, P.settings.tolerance, P.settings.contiguous);
@@ -336,6 +535,7 @@ P.tools.list = [
     id: 'bucket', name: 'Secchiello', key: 'G', icon: ICONS.bucket, cursor: 'crosshair',
     down(pt) {
       const l = requireLayer(); if (!l) return;
+      if (l.textData) l.textData = null;
       const d = P.doc, ctx = l.canvas.getContext('2d');
       const img = ctx.getImageData(0, 0, d.width, d.height);
       const m = P.floodMask(img, d.width, d.height, pt.x, pt.y, P.settings.tolerance, P.settings.contiguous);
@@ -347,6 +547,22 @@ P.tools.list = [
       ctx.putImageData(img, 0, 0);
       P.Doc.markDirty(l);
       P.history.commit('Secchiello');
+    },
+    move() {}, up() {}
+  },
+  {
+    id: 'text', name: 'Testo', key: 'T', icon: ICONS.text, cursor: 'text',
+    down(pt) {
+      if (!P.doc) return;
+      // Controlla se l'utente ha cliccato su un livello di testo esistente per modificarlo
+      const hit = P.Doc.layerAtPoint(pt.x, pt.y);
+      if (hit && hit.textData) {
+        P.Doc.selectLayer(hit.id);
+        P.ui.updateLayers();
+        P.dialog.textEditor({ layer: hit });
+      } else {
+        P.dialog.textEditor({ x: Math.round(pt.x), y: Math.round(pt.y) });
+      }
     },
     move() {}, up() {}
   },

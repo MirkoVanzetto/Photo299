@@ -19,12 +19,21 @@ P.history = {
   // Registra lo stato corrente del documento come nuovo passo
   commit(label) {
     const d = P.doc; if (!d) return;
+    P.Doc.ensureSelection();
     const entry = {
       label,
       time: Date.now(),
       width: d.width, height: d.height,
       activeId: d.activeId,
-      layers: d.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, opacity: l.opacity, snap: this.freeze(l) }))
+      selectedIds: [...(d.selectedIds || [d.activeId])],
+      layers: d.layers.map(l => ({
+        id: l.id,
+        name: l.name,
+        visible: l.visible,
+        opacity: l.opacity,
+        textData: l.textData ? { ...l.textData } : null,
+        snap: this.freeze(l)
+      }))
     };
     this.entries.length = this.index + 1;
     this.entries.push(entry);
@@ -44,10 +53,16 @@ P.history = {
         l.canvas = P.util.cloneCanvas(s.snap.canvas);
         l.snap = s.snap; l.dirty = false;
       }
-      l.name = s.name; l.visible = s.visible; l.opacity = s.opacity; l.thumbDirty = true;
+      l.name = s.name;
+      l.visible = s.visible;
+      l.opacity = s.opacity;
+      l.textData = s.textData ? { ...s.textData } : null;
+      l.thumbDirty = true;
       return l;
     });
     d.activeId = e.activeId;
+    d.selectedIds = e.selectedIds ? [...e.selectedIds] : [e.activeId];
+    P.Doc.ensureSelection();
     this.index = i;
     P.sel.clear(true);
     P.app.changed({ content: true, sizeChanged: true });

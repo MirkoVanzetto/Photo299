@@ -36,6 +36,7 @@ P.view = {
 
 P.render = {
   override: null,
+  overrides: null, // Map<layerId, drawFn(ctx)>
   comp: null,
   scratch: null,
   contentDirty: true,
@@ -61,12 +62,18 @@ P.render = {
     for (const l of d.layers) {
       if (!l.visible) continue;
       ctx.globalAlpha = l.opacity;
-      if (this.override && this.override.layerId === l.id) {
+      let ovDraw = null;
+      if (this.overrides && this.overrides.has(l.id)) ovDraw = this.overrides.get(l.id);
+      else if (this.override && this.override.layerId === l.id) ovDraw = this.override.draw;
+
+      if (ovDraw) {
         const sc = this.scratch.getContext('2d');
         sc.clearRect(0, 0, d.width, d.height);
-        this.override.draw(sc);
+        ovDraw(sc);
         ctx.drawImage(this.scratch, 0, 0);
-      } else ctx.drawImage(l.canvas, 0, 0);
+      } else {
+        ctx.drawImage(l.canvas, 0, 0);
+      }
     }
     ctx.globalAlpha = 1;
     this.contentDirty = false;

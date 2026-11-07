@@ -1,4 +1,4 @@
-// Photo299 - avvio applicazione ed eventi di input
+// Photo299 - avvio applicazione ed eventi di input (mouse + pen + touch + tasto destro)
 'use strict';
 
 P.app = {
@@ -14,7 +14,6 @@ P.app = {
     if (!opts.noAutosave) P.autosave();
   },
 
-  // Conclude le operazioni in corso prima di un nuovo comando
   cancelPending() {
     if (P.transform.active) P.transform.commit();
     const t = P.tools.current;
@@ -42,6 +41,10 @@ P.app = {
     }
     if (pending) await P.cmd.openFromBytes(pending.name, P.util.base64ToBytes(pending.base64), pending.path);
     else if (restored) { P.view.fit(1); P.util.toast('Sessione precedente ripristinata dalla cache'); }
+    else {
+      // Crea subito una pagina bianca 1920x1080 pronta per disegnare immediatamente
+      P.cmd.newDocument(1920, 1080, '#ffffff', 'Senza titolo');
+    }
 
     P.ui.updateTitle();
     P.ui.updateStatus();
@@ -50,36 +53,70 @@ P.app = {
 
   bindPointer() {
     const cv = P.view.canvas, v = P.view;
+
     cv.addEventListener('pointerdown', e => {
       P.ui.closeMenus && P.ui.closeMenus();
       if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-      cv.setPointerCapture(e.pointerId);
+
+      // Tasto destro -> viene gestito da contextmenu
+      if (e.button === 2) return;
+
       const t = P.tools.current;
       if (e.button === 1 || (e.button === 0 && (this.spaceDown || (t && t.id === 'hand')))) {
+        try { cv.setPointerCapture(e.pointerId); } catch {}
         this.panning = { x: e.clientX, y: e.clientY, px: v.panX, py: v.panY };
-        v.setCursor('grabbing'); e.preventDefault(); return;
+        v.setCursor('grabbing');
+        e.preventDefault();
+        return;
       }
+
       if (e.button !== 0 || !P.doc) return;
+      e.preventDefault();
+      try { cv.setPointerCapture(e.pointerId); } catch {}
+
       const pt = v.eventToDoc(e);
+      v.mouseDoc = pt; v.mouseIn = true;
       this.dragging = true;
       if (P.transform.active) { P.transform.down(pt); return; }
       if (t) t.down(pt, e);
     });
-    cv.addEventListener('pointermove', e => {
+
+    // Ascoltiamo pointermove su window per garantire il trascinamento continuo del pennello anche ad alta velocità
+    window.addEventListener('pointermove', e => {
       const pt = v.eventToDoc(e);
-      v.mouseDoc = pt; v.mouseIn = true;
+      v.mouseDoc = pt;
+      const rect = cv.getBoundingClientRect();
+      v.mouseIn = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
       P.ui.updateStatus();
+
       if (this.panning) {
         v.panX = this.panning.px + e.clientX - this.panning.x;
         v.panY = this.panning.py + e.clientY - this.panning.y;
-        P.render.request(); return;
+        P.render.request();
+        return;
       }
+
       if (!P.doc) return;
-      if (P.transform.active) { P.transform.move(pt, e); return; }
+      if (P.transform.active) {
+        if (this.dragging || v.mouseIn) P.transform.move(pt, e);
+        return;
+      }
+
       const t = P.tools.current;
-      if (t) t.move(pt, e);
-      if (t && t.overlay) P.render.request();
+      // Sicurezza: se il bottone sinistro non è più premuto durante il trascinamento, chiudi il tratto
+      if (this.dragging && e.buttons === 0) {
+        this.dragging = false;
+        if (t) t.up(pt, e);
+        return;
+      }
+
+      if (this.dragging && t) {
+        t.move(pt, e);
+      } else if (v.mouseIn && t && t.overlay) {
+        P.render.request();
+      }
     });
+
     const end = e => {
       if (this.panning) {
         this.panning = null;
@@ -94,10 +131,13 @@ P.app = {
       const t = P.tools.current;
       if (t) t.up(pt, e);
     };
-    cv.addEventListener('pointerup', end);
-    cv.addEventListener('pointercancel', end);
+
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+
     cv.addEventListener('pointerleave', () => { v.mouseIn = false; P.ui.updateStatus(); P.render.request(); });
     cv.addEventListener('pointerenter', () => { v.mouseIn = true; });
+
     cv.addEventListener('wheel', e => {
       e.preventDefault();
       if (!P.doc) return;
@@ -105,7 +145,14 @@ P.app = {
       if (e.shiftKey && !e.ctrlKey) { v.panX -= e.deltaY; P.render.request(); return; }
       v.zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
     }, { passive: false });
-    cv.addEventListener('contextmenu', e => e.preventDefault());
+
+    // Menu contestuale tasto destro sul canvas (Deseleziona, Trasforma, Taglia, Copia, Testo...)
+    cv.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      if (!P.doc) return;
+      const pt = v.eventToDoc(e);
+      P.ui.openContextMenu(e.clientX, e.clientY, pt);
+    });
   },
 
   combo(e) {
@@ -136,7 +183,10 @@ P.app = {
       if (e.key === 'Escape') {
         P.ui.closeMenus && P.ui.closeMenus();
         if (P.transform.active) { P.transform.cancel(); return; }
+        if (tool && tool.rect) { tool.cancel(); return; }
         if (tool && tool.cancel) tool.cancel();
+        // Premendo Esc con una selezione attiva la deseleziona subito!
+        if (P.sel.active) { P.sel.clear(); P.util.status('Deselezionato'); return; }
         return;
       }
       if (P.transform.active && e.key.startsWith('Arrow') && !e.ctrlKey) {
@@ -147,6 +197,14 @@ P.app = {
       }
 
       const combo = this.combo(e);
+      // Scorciatoia strumento Testo 'T' seleziona lo strumento testo
+      if (combo === 'T') {
+        e.preventDefault();
+        P.app.cancelPending();
+        P.tools.select('text');
+        return;
+      }
+
       for (const [id, c] of Object.entries(P.commands)) {
         if (c.sc && c.sc.includes(combo)) { e.preventDefault(); P.run(id); return; }
       }
@@ -186,7 +244,6 @@ P.app = {
       const img = await P.util.blobToImage(f);
       P.cmd.placeImage(img, f.name.replace(/\.[^.]+$/, ''));
     });
-    // incolla dal sistema (fallback browser)
     document.addEventListener('paste', async e => {
       if (window.api || P.dialog.isOpen) return;
       const item = [...e.clipboardData.items].find(i => i.type.startsWith('image/'));

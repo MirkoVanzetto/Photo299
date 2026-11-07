@@ -36,7 +36,6 @@ P.storage = {
     try {
       const h = P.history; const d = P.doc;
       if (!d || h.index < 0) { await this.clear(); return; }
-      // 1. salva i bitmap nuovi
       const referenced = new Map();
       for (const e of h.entries) for (const l of e.layers) referenced.set(l.snap.key, l.snap);
       for (const [key, snap] of referenced) {
@@ -45,18 +44,28 @@ P.storage = {
         await this.req(this.tx(['bitmaps'], 'readwrite').objectStore('bitmaps').put(blob, key));
         this.savedKeys.add(key);
       }
-      // 2. salva i metadati di sessione
       const meta = {
-        version: 1,
+        version: 2,
         doc: { id: d.id, name: d.name, filePath: d.filePath },
         index: h.index,
         entries: h.entries.map(e => ({
-          label: e.label, time: e.time, width: e.width, height: e.height, activeId: e.activeId,
-          layers: e.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, opacity: l.opacity, key: l.snap.key }))
+          label: e.label,
+          time: e.time,
+          width: e.width,
+          height: e.height,
+          activeId: e.activeId,
+          selectedIds: e.selectedIds || [e.activeId],
+          layers: e.layers.map(l => ({
+            id: l.id,
+            name: l.name,
+            visible: l.visible,
+            opacity: l.opacity,
+            textData: l.textData || null,
+            key: l.snap.key
+          }))
         }))
       };
       await this.req(this.tx(['session'], 'readwrite').objectStore('session').put(meta, 'current'));
-      // 3. rimuove i bitmap non più usati
       const store = this.tx(['bitmaps'], 'readwrite').objectStore('bitmaps');
       const keys = await this.req(store.getAllKeys());
       const del = keys.filter(k => !referenced.has(k));
@@ -81,7 +90,6 @@ P.storage = {
     this.savedKeys.clear();
   },
 
-  // Ripristina la sessione salvata. Restituisce true se ripristinata.
   async load() {
     if (!this.db) return false;
     const meta = await this.req(this.tx(['session']).objectStore('session').get('current'));
@@ -99,11 +107,32 @@ P.storage = {
       this.savedKeys.add(l.key);
     }
     const entries = meta.entries.map(e => ({
-      label: e.label, time: e.time, width: e.width, height: e.height, activeId: e.activeId,
-      layers: e.layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, opacity: l.opacity, snap: snaps.get(l.key) }))
+      label: e.label,
+      time: e.time,
+      width: e.width,
+      height: e.height,
+      activeId: e.activeId,
+      selectedIds: e.selectedIds || [e.activeId],
+      layers: e.layers.map(l => ({
+        id: l.id,
+        name: l.name,
+        visible: l.visible,
+        opacity: l.opacity,
+        textData: l.textData || null,
+        snap: snaps.get(l.key)
+      }))
     }));
     const cur = entries[meta.index];
-    P.doc = { id: meta.doc.id, name: meta.doc.name, filePath: meta.doc.filePath || null, width: cur.width, height: cur.height, layers: [], activeId: cur.activeId };
+    P.doc = {
+      id: meta.doc.id,
+      name: meta.doc.name,
+      filePath: meta.doc.filePath || null,
+      width: cur.width,
+      height: cur.height,
+      layers: [],
+      activeId: cur.activeId,
+      selectedIds: cur.selectedIds || [cur.activeId]
+    };
     P.history.entries = entries;
     P.history.restore(meta.index);
     return true;
